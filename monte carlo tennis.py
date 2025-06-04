@@ -61,11 +61,38 @@ def calculate_elo(df, k=32, default_elo=1500):
     # Add recency weighting to k-factor
     current_year = datetime.datetime.now().year
     
+    # Tournament stage importance factors
+    stage_importance = {
+        'F': 2.0,    # Final
+        'SF': 1.7,   # Semi-final
+        'QF': 1.5,   # Quarter-final
+        'R16': 1.3,  # Round of 16
+        'R32': 1.2,  # Round of 32
+        'R64': 1.1,  # Round of 64
+        'R128': 1.0  # Round of 128
+    }
+    
+    # Tournament level importance
+    tourney_importance = {
+        'G': 2.0,    # Grand Slam
+        'M': 1.5,    # Masters 1000
+        'A': 1.3,    # ATP 500
+        'B': 1.1,    # ATP 250
+        'D': 1.0     # Other tournaments
+    }
+    
     for idx, row in df.iterrows():
         winner = row['winner_name']
         loser = row['loser_name']
         surface = row['surface']
         match_year = row['year']
+        round_name = row['round']
+        tourney_level = row['tourney_level']
+        
+        # Calculate importance multiplier
+        stage_factor = stage_importance.get(round_name, 1.0)
+        tourney_factor = tourney_importance.get(tourney_level, 1.0)
+        importance_multiplier = stage_factor * tourney_factor
         
         # Increase k-factor for more recent matches and younger players
         winner_age = row['winner_age'] if pd.notnull(row['winner_age']) else 25
@@ -74,13 +101,13 @@ def calculate_elo(df, k=32, default_elo=1500):
         # Higher k-factor for:
         # 1. Recent matches
         # 2. Young players (higher potential for improvement)
-        # 3. Significant ranking differences
-        recency_factor = 1 + (match_year - 2020) * 0.2  # More weight to recent matches
-        age_factor_winner = 1.2 if winner_age < 23 else 1.0  # Boost for young players
+        # 3. Important matches (Grand Slams, later rounds)
+        recency_factor = 1 + (match_year - 2020) * 0.2
+        age_factor_winner = 1.2 if winner_age < 23 else 1.0
         age_factor_loser = 1.2 if loser_age < 23 else 1.0
         
-        k_winner = k * recency_factor * age_factor_winner
-        k_loser = k * recency_factor * age_factor_loser
+        k_winner = k * recency_factor * age_factor_winner * importance_multiplier
+        k_loser = k * recency_factor * age_factor_loser * importance_multiplier
         
         # Get current Elo ratings
         winner_elo = player_elo[winner][surface]
@@ -113,7 +140,9 @@ def create_features(df, player_elo):
         'surface_matches': defaultdict(int),
         'surface_wins': defaultdict(int),
         'recent_matches': [],  # Store last 10 matches
-        'h2h_records': defaultdict(lambda: {'wins': 0, 'losses': 0})
+        'h2h_records': defaultdict(lambda: {'wins': 0, 'losses': 0}),
+        'grand_slam_performance': defaultdict(lambda: {'matches': 0, 'wins': 0}),  # Track performance by round
+        'recent_grand_slam_results': []  # Store last 5 Grand Slam results with round reached
     })
     
     # First pass: collect player statistics
@@ -121,16 +150,30 @@ def create_features(df, player_elo):
         winner = row['winner_name']
         loser = row['loser_name']
         surface = row['surface']
+        round_name = row['round']
+        tourney_level = row['tourney_level']
         
         # Update general stats
         player_stats[winner]['matches_played'] += 1
         player_stats[winner]['matches_won'] += 1
         player_stats[loser]['matches_played'] += 1
         
-        # Update Grand Slam stats
-        player_stats[winner]['grand_slam_matches'] += 1
-        player_stats[winner]['grand_slam_wins'] += 1
-        player_stats[loser]['grand_slam_matches'] += 1
+        # Update Grand Slam stats with round information
+        if tourney_level == 'G':
+            player_stats[winner]['grand_slam_matches'] += 1
+            player_stats[winner]['grand_slam_wins'] += 1
+            player_stats[loser]['grand_slam_matches'] += 1
+            
+            # Track performance by round
+            player_stats[winner]['grand_slam_performance'][round_name]['matches'] += 1
+            player_stats[winner]['grand_slam_performance'][round_name]['wins'] += 1
+            player_stats[loser]['grand_slam_performance'][round_name]['matches'] += 1
+            
+            # Store recent Grand Slam results
+            player_stats[winner]['recent_grand_slam_results'].append((round_name, 'W'))
+            player_stats[loser]['recent_grand_slam_results'].append((round_name, 'L'))
+            player_stats[winner]['recent_grand_slam_results'] = player_stats[winner]['recent_grand_slam_results'][-5:]
+            player_stats[loser]['recent_grand_slam_results'] = player_stats[loser]['recent_grand_slam_results'][-5:]
         
         # Update surface stats
         player_stats[winner]['surface_matches'][surface] += 1
@@ -157,6 +200,12 @@ def create_features(df, player_elo):
         winner_recent_form = sum(player_stats[winner]['recent_matches']) / len(player_stats[winner]['recent_matches']) if player_stats[winner]['recent_matches'] else 0.5
         loser_recent_form = sum(player_stats[loser]['recent_matches']) / len(player_stats[loser]['recent_matches']) if player_stats[loser]['recent_matches'] else 0.5
         
+        # Calculate Grand Slam performance metrics
+        winner_gs_deep_runs = sum(1 for round_name, result in player_stats[winner]['recent_grand_slam_results'] 
+                                if round_name in ['QF', 'SF', 'F'])
+        loser_gs_deep_runs = sum(1 for round_name, result in player_stats[loser]['recent_grand_slam_results'] 
+                               if round_name in ['QF', 'SF', 'F'])
+        
         # Calculate surface-specific win rates
         winner_surface_wr = player_stats[winner]['surface_wins'][surface] / max(1, player_stats[winner]['surface_matches'][surface])
         loser_surface_wr = player_stats[loser]['surface_wins'][surface] / max(1, player_stats[loser]['surface_matches'][surface])
@@ -180,6 +229,7 @@ def create_features(df, player_elo):
             'form_diff': winner_recent_form - loser_recent_form,
             'h2h_diff': h2h_winner - h2h_loser,
             'age_diff': winner_age - loser_age,
+            'gs_deep_runs_diff': winner_gs_deep_runs - loser_gs_deep_runs,
             'surface_Hard': 1 if surface == 'Hard' else 0,
             'surface_Clay': 1 if surface == 'Clay' else 0,
             'surface_Grass': 1 if surface == 'Grass' else 0,
@@ -190,7 +240,8 @@ def create_features(df, player_elo):
         
         # Add reverse case
         reverse_features = base_features.copy()
-        for key in ['seed_diff', 'elo_diff', 'win_rate_diff', 'surface_win_rate_diff', 'form_diff', 'h2h_diff', 'age_diff']:
+        for key in ['seed_diff', 'elo_diff', 'win_rate_diff', 'surface_win_rate_diff', 'form_diff', 
+                   'h2h_diff', 'age_diff', 'gs_deep_runs_diff']:
             reverse_features[key] = -reverse_features[key]
         reverse_features['winner'] = 0
         
@@ -212,29 +263,34 @@ def train_model(X, y):
 
 # 5. Tournament Simulation
 def simulate_match(player1, player2, surface, model, player_elo):
-    # Create feature vector with all possible surface columns
+    # Calculate Elo-based probability
+    elo_diff = player_elo[player1][surface] - player_elo[player2][surface]
+    elo_prob = 1 / (1 + 10**(-elo_diff/400))
+    
+    # Create feature vector with all required features
     features = pd.DataFrame([{
-        'seed_diff': 0,
-        'elo_diff': player_elo[player1][surface] - player_elo[player2][surface],
-        'win_rate_diff': 0,
-        'surface_win_rate_diff': 0,
-        'form_diff': 0,
-        'h2h_diff': 0,
-        'age_diff': 0,
+        'seed_diff': 0,  # We don't have seeding info for future tournaments
+        'elo_diff': elo_diff,  # Use actual Elo difference
+        'win_rate_diff': 0.2 * (elo_prob - 0.5),  # Derive from Elo
+        'surface_win_rate_diff': 0.3 * (elo_prob - 0.5) if surface in ['Clay', 'Grass'] else 0.1 * (elo_prob - 0.5),
+        'form_diff': 0.15 * (elo_prob - 0.5),  # Recent form contribution
+        'h2h_diff': 0,  # Historical head-to-head captured in Elo
+        'age_diff': 0,  # Age factor already applied in Elo calculation
+        'gs_deep_runs_diff': 0.25 * (elo_prob - 0.5),  # Scale with Elo rating
         'surface_Hard': 1 if surface == 'Hard' else 0,
         'surface_Clay': 1 if surface == 'Clay' else 0,
         'surface_Grass': 1 if surface == 'Grass' else 0
     }])
     
     try:
-        prob = model.predict_proba(features)[0][1]
-        return player1 if random.random() < prob else player2
+        # Combine model probability with Elo probability
+        model_prob = model.predict_proba(features)[0][1]
+        final_prob = 0.7 * elo_prob + 0.3 * model_prob  # Give more weight to Elo
+        return player1 if random.random() < final_prob else player2
     except Exception as e:
         print(f"Error in match simulation between {player1} and {player2}: {e}")
-        # Use Elo rating as fallback
-        elo_diff = player_elo[player1][surface] - player_elo[player2][surface]
-        prob = 1 / (1 + 10**(-elo_diff/400))
-        return player1 if random.random() < prob else player2
+        # Use pure Elo rating as fallback
+        return player1 if random.random() < elo_prob else player2
 
 def run_tournament(players, surface, model, player_elo):
     current_round = players.copy()
@@ -294,7 +350,7 @@ def monte_carlo(df, model, player_elo, surface, tournament_name, n_simulations=2
     
     print(f"Found {len(active_players)} active players")
     
-    # Calculate player metrics
+    # Calculate player metrics with surface-specific Elo as primary factor
     player_metrics = {}
     for player in active_players:
         recent_matches = df[
@@ -321,9 +377,9 @@ def monte_carlo(df, model, player_elo, surface, tournament_name, n_simulations=2
             
             age_factor = 1.0
             if player_age and player_age < 23:
-                age_factor = 1.3  # Boost young players
+                age_factor = 1.2  # Boost young players
             
-            # Calculate composite score
+            # Calculate composite score with more weight on Elo
             player_metrics[player] = {
                 'elo': player_elo[player][surface],
                 'win_rate': win_rate,
@@ -331,9 +387,9 @@ def monte_carlo(df, model, player_elo, surface, tournament_name, n_simulations=2
                 'recent_matches': len(recent_matches),
                 'age_factor': age_factor,
                 'composite_score': (
-                    player_elo[player][surface] * 0.4 +
-                    win_rate * 1000 * 0.3 +
-                    surface_win_rate * 1000 * 0.3
+                    player_elo[player][surface] * 0.7 +  # More weight on Elo
+                    win_rate * 1000 * 0.15 +
+                    surface_win_rate * 1000 * 0.15
                 ) * age_factor
             }
     
@@ -344,14 +400,14 @@ def monte_carlo(df, model, player_elo, surface, tournament_name, n_simulations=2
         reverse=True
     )
     
-    # Take top 128 players for Grand Slam simulation
-    tournament_players = [p[0] for p in ranked_players[:128]]
-    
     # Print some active player stats
     print("\nTop 10 active players by rating:")
     for player, score in ranked_players[:10]:
         print(f"{player:<30} (Rating: {player_metrics[player]['elo']:.0f}, "
               f"Recent matches: {player_metrics[player]['recent_matches']})")
+    
+    # Take top 128 players for Grand Slam simulation
+    tournament_players = [p[0] for p in ranked_players[:128]]
     
     results = defaultdict(int)
     print(f"\nRunning {n_simulations} simulations...")
@@ -361,11 +417,19 @@ def monte_carlo(df, model, player_elo, surface, tournament_name, n_simulations=2
         if sim % update_interval == 0:
             print(f"Progress: {sim}/{n_simulations} simulations completed ({sim/n_simulations*100:.0f}%)")
         
-        # Shuffle players while maintaining some seeding structure
+        # Maintain some seeding structure for realism
         top_32 = tournament_players[:32]
         rest = tournament_players[32:]
         random.shuffle(rest)
-        seeded_players = top_32 + rest
+        
+        # Distribute seeds throughout the draw
+        seeded_players = []
+        sections = 32  # Number of sections in the draw
+        for i in range(sections):
+            if i < len(top_32):
+                seeded_players.append(top_32[i])  # Add a seeded player
+            if i < len(rest):
+                seeded_players.append(rest[i])    # Add an unseeded player
         
         winner = run_tournament(seeded_players, surface, model, player_elo)
         results[winner] += 1
@@ -401,7 +465,24 @@ if __name__ == "__main__":
     
     print("Creating features for match prediction...")
     features_df = create_features(df, player_elo)
-    X = features_df.drop('winner', axis=1)
+    
+    # Ensure all required features are present
+    required_features = [
+        'seed_diff',
+        'elo_diff',
+        'win_rate_diff',
+        'surface_win_rate_diff',
+        'form_diff',
+        'h2h_diff',
+        'age_diff',
+        'gs_deep_runs_diff',
+        'surface_Hard',
+        'surface_Clay',
+        'surface_Grass'
+    ]
+    
+    # Drop the target variable and any other columns not in required_features
+    X = features_df[required_features]
     y = features_df['winner']
     
     print("Training prediction model...")
