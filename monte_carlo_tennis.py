@@ -142,7 +142,14 @@ def calculate_elo(df, k=32, default_elo=1500):
         # Store history for visualization
         elo_history[winner].append((match_date, surface, player_elo[winner][surface]))
         elo_history[loser].append((match_date, surface, player_elo[loser][surface]))
-    return dict(player_elo), elo_history
+
+    # Convert nested defaultdicts to dicts for pickling
+    def defaultdict_to_dict(d):
+        if isinstance(d, defaultdict):
+            d = {k: defaultdict_to_dict(v) for k, v in d.items()}
+        return d
+
+    return defaultdict_to_dict(player_elo), defaultdict_to_dict(elo_history)
 
 # 3. Feature Engineering
 def create_features(df, player_elo):
