@@ -57,10 +57,9 @@ def load_data(start_year=2020):
 def calculate_elo(df, k=32, default_elo=1500):
     player_elo = defaultdict(lambda: defaultdict(lambda: default_elo))
     elo_history = defaultdict(list)
-    
-    # Add recency weighting to k-factor
+    surfaces = ['Hard', 'Clay', 'Grass']
     current_year = datetime.datetime.now().year
-    
+
     # Tournament stage importance factors
     stage_importance = {
         'F': 2.0,    # Final
@@ -71,8 +70,6 @@ def calculate_elo(df, k=32, default_elo=1500):
         'R64': 1.1,  # Round of 64
         'R128': 1.0  # Round of 128
     }
-    
-    # Tournament level importance
     tourney_importance = {
         'G': 2.0,    # Grand Slam
         'M': 1.5,    # Masters 1000
@@ -80,7 +77,10 @@ def calculate_elo(df, k=32, default_elo=1500):
         'B': 1.1,    # ATP 250
         'D': 1.0     # Other tournaments
     }
-    
+    # Parameters for improvements
+    cross_surface_weight = 0.1  # 10% of Elo update goes to other surfaces
+    decay_lambda = 0.3          # Decay rate for old matches
+
     for idx, row in df.iterrows():
         winner = row['winner_name']
         loser = row['loser_name']
@@ -88,43 +88,60 @@ def calculate_elo(df, k=32, default_elo=1500):
         match_year = row['year']
         round_name = row['round']
         tourney_level = row['tourney_level']
-        
+        match_date = row['tourney_date']
         # Calculate importance multiplier
         stage_factor = stage_importance.get(round_name, 1.0)
         tourney_factor = tourney_importance.get(tourney_level, 1.0)
         importance_multiplier = stage_factor * tourney_factor
-        
-        # Increase k-factor for more recent matches and younger players
+        # Recency/decay factor
+        years_ago = current_year - match_year
+        decay = np.exp(-decay_lambda * years_ago)
+        # Age factors
         winner_age = row['winner_age'] if pd.notnull(row['winner_age']) else 25
         loser_age = row['loser_age'] if pd.notnull(row['loser_age']) else 25
-        
-        # Higher k-factor for:
-        # 1. Recent matches
-        # 2. Young players (higher potential for improvement)
-        # 3. Important matches (Grand Slams, later rounds)
-        recency_factor = 1 + (match_year - 2020) * 0.2
         age_factor_winner = 1.2 if winner_age < 23 else 1.0
         age_factor_loser = 1.2 if loser_age < 23 else 1.0
-        
-        k_winner = k * recency_factor * age_factor_winner * importance_multiplier
-        k_loser = k * recency_factor * age_factor_loser * importance_multiplier
-        
+        # Margin of victory (games difference)
+        margin = 1.0
+        if 'score' in row and isinstance(row['score'], str):
+            try:
+                sets = [s for s in row['score'].split() if s and s[0].isdigit()]
+                winner_games = 0
+                loser_games = 0
+                for s in sets:
+                    parts = s.split('-')
+                    if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+                        w, l = int(parts[0]), int(parts[1])
+                        winner_games += w
+                        loser_games += l
+                total_games = winner_games + loser_games
+                if total_games > 0:
+                    margin = 1 + (winner_games - loser_games) / total_games  # Range: ~0.5 to 1.5
+            except Exception:
+                margin = 1.0
+        # K-factors
+        k_winner = k * importance_multiplier * age_factor_winner * decay * margin
+        k_loser = k * importance_multiplier * age_factor_loser * decay * margin
         # Get current Elo ratings
         winner_elo = player_elo[winner][surface]
         loser_elo = player_elo[loser][surface]
-        
         # Calculate expected scores
         expected_winner = 1 / (1 + 10**((loser_elo - winner_elo)/400))
         expected_loser = 1 - expected_winner
-        
-        # Update Elo ratings
-        player_elo[winner][surface] += k_winner * (1 - expected_winner)
-        player_elo[loser][surface] += k_loser * (0 - expected_loser)
-        
+        # Elo changes
+        winner_elo_change = k_winner * (1 - expected_winner)
+        loser_elo_change = k_loser * (0 - expected_loser)
+        # Update Elo ratings for main surface
+        player_elo[winner][surface] += winner_elo_change
+        player_elo[loser][surface] += loser_elo_change
+        # Surface cross-influence: update other surfaces by a fraction
+        for other_surface in surfaces:
+            if other_surface != surface:
+                player_elo[winner][other_surface] += cross_surface_weight * winner_elo_change
+                player_elo[loser][other_surface] += cross_surface_weight * loser_elo_change
         # Store history for visualization
-        elo_history[winner].append((row['tourney_date'], surface, player_elo[winner][surface]))
-        elo_history[loser].append((row['tourney_date'], surface, player_elo[loser][surface]))
-    
+        elo_history[winner].append((match_date, surface, player_elo[winner][surface]))
+        elo_history[loser].append((match_date, surface, player_elo[loser][surface]))
     return dict(player_elo), elo_history
 
 # 3. Feature Engineering
@@ -451,8 +468,10 @@ def print_results(results, title):
     print("\n" + "="*50)
     print(title)
     print("="*50)
+    print(f"{'Player':<30} {'Win %':>8} {'Odds':>8}")
     for player, prob in results.items():
-        print(f"{player:<30} {prob:.1%}")
+        odds = 1 / prob if prob > 0 else float('inf')
+        print(f"{player:<30} {prob:.1%}   {odds:>7.2f}")
     print("="*50 + "\n")
 
 # Main Execution
