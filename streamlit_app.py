@@ -49,22 +49,22 @@ st.markdown(f"**Surface:** {surface}")
 # Show actual bracket image for Australian Open 2025
 if selected_slam == "Australian Open 2025":
     st.subheader("Actual Australian Open 2025 Bracket")
-    st.image(r"C:\Users\waldo\Pictures\australian_open_2025_bracket.png", caption="Australian Open 2025 Bracket", use_container_width=True)
+    st.image("images/australian_open_2025_bracket.png", caption="Australian Open 2025 Bracket", use_container_width=True)
 
 # Show actual bracket image for Roland Garros 2025
 if selected_slam == "Roland Garros 2025":
     st.subheader("Actual Roland Garros 2025 Bracket")
-    st.image(r"C:\Users\waldo\Pictures\Screenshots\roland_garros_bracket.png", caption="Roland Garros 2025 Bracket", use_container_width=True)
+    st.image("images/roland_garros_bracket.png", caption="Roland Garros 2025 Bracket", use_container_width=True)
 
 # Show actual bracket image for Wimbledon 2025
 if selected_slam == "Wimbledon 2025":
     st.subheader("Actual Wimbledon 2025 Bracket")
-    st.image(r"C:\Users\waldo\Pictures\wimblendon_odds.png", caption="Wimbledon 2025 Bracket", use_container_width=True)
+    st.image("images/wimblendon_odds.png", caption="Wimbledon 2025 Bracket", use_container_width=True)
 
 # Show actual bracket image for US Open 2025
 if selected_slam == "US Open 2025":
     st.subheader("Actual US Open 2025 Bracket")
-    st.image(r"C:\Users\waldo\Pictures\US_open_odds.png", caption="US Open 2025 Bracket", use_container_width=True)
+    st.image("images/US_open_odds.png", caption="US Open 2025 Bracket", use_container_width=True)
 
 if st.button('🎲 Simulate Tournament'):
     with st.spinner('Running Monte Carlo simulation...'):
