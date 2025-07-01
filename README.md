@@ -19,7 +19,7 @@ Most tennis prediction models:
 ## 💡 Our Solution
 
 We propose a data-driven approach with:
-- Surface-aware modeling**
+- Surface-aware modeling
 - Probabilistic match outcomes
 - Momentum and form tracking
 - Full tournament simulation via Monte Carlo
